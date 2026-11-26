@@ -11,39 +11,30 @@
 <main class="app">
   <header class="hero">
     <div class="logo">✂</div>
-    <div><h1>AI Clipper</h1><p>YouTube creators ke authorized videos se 10 short clips</p></div>
+    <div><h1>AI Clipper</h1><p>Authorized video se AI ke saath 10 short clips</p></div>
   </header>
-
   <section class="panel">
     <span class="step">STEP 1</span>
     <h2>Video details</h2>
     <label for="videoUrl">YouTube video / Live link (reference)</label>
     <input type="url" id="videoUrl" placeholder="https://www.youtube.com/watch?v=...">
-    <p class="hint">Link se abhi video download nahi hota. Creator ki permission wala original video file neeche upload karein.</p>
+    <p class="hint">YouTube URL abhi sirf reference hai. Video ki original file creator ki permission se upload karein.</p>
     <label for="video">Authorized original video file</label>
     <input type="file" id="video" accept="video/*">
   </section>
-
   <section class="panel">
     <span class="step">STEP 2</span>
-    <h2>Transcript paste karein</h2>
-    <p class="hint">Timestamp ke saath har line likhein. Example format:</p>
-    <pre>00:01:12 Ye dekho ab asli twist aayega!
-00:03:40 Mujhe yakeen nahi ho raha...
-00:05:15 Aaj main ek secret batane wala hoon.</pre>
-    <label for="transcript">Timestamp + dialogue</label>
-    <textarea id="transcript" rows="9" placeholder="00:00:25 Yahan apna dialogue paste karein..."></textarea>
-    <button id="analyze">Find 10 best moments</button>
+    <h2>AI se 10 viral moments dhoondhein</h2>
+    <p class="hint">AI video ki speech transcribe karega, phir 10 moments ke start/end aur duration khud select karega. API processing charges lag sakte hain.</p>
+    <button id="analyze">Analyze video & find 10 clips</button>
   </section>
-
   <section class="panel" id="resultsPanel" hidden>
     <span class="step">STEP 3</span>
-    <h2>10 suggested clips</h2>
-    <p class="hint">Suggestions transcript ke hooks aur dialogue signals se score ki gayi hain. Ye abhi full AI analysis nahi hai.</p>
+    <h2>AI ke 10 clip suggestions</h2>
     <ol id="clipList"></ol>
-    <button id="makeClips">Create all 10 clips</button>
+    <button id="makeClips">Create & download all 10 clips (ZIP)</button>
   </section>
-  <p id="message" role="status" aria-live="polite">Ready. Apna authorized video aur timestamp transcript add karein.</p>
+  <p id="message" role="status" aria-live="polite">Ready. Permission wala video upload karein.</p>
 </main>
 <script src="app.js"></script>
 </body>

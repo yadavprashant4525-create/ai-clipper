@@ -1,32 +1,27 @@
-# AI Clipper — first 10-moment prototype
-
-A mobile-friendly Node.js + FFmpeg app for creating up to 10 short MP4 clips from a creator-authorized source video.
+# AI Clipper — AI-assisted 10 clip prototype
 
 ## Current workflow
-1. Paste a YouTube video or Live URL as a reference.
-2. Upload the original video file that you have permission to edit.
-3. Paste at least 10 transcript lines with timestamps, for example `00:01:12 Dialogue`.
-4. The app ranks transcript lines using simple hook-word and punctuation heuristics and selects 10 separated moments.
-5. It creates 45-second MP4 clips starting 10 seconds before each selected timestamp.
+1. Paste the YouTube video / Live URL as a reference.
+2. Upload the original video file supplied by the creator or otherwise authorized for editing.
+3. The server extracts audio with FFmpeg and transcribes it with OpenAI Whisper.
+4. An OpenAI language model selects exactly 10 moments, including start/end times and a suggested duration for each.
+5. FFmpeg renders all 10 MP4 clips and returns one ZIP file.
 
-## Important limitations
-- This is a prototype, not a full AI model. Moment ranking uses simple text heuristics; clip duration is currently fixed at 45 seconds.
-- A YouTube URL is stored only as a reference in the form; it is not downloaded. YouTube Data API does not provide a general MP4 download endpoint.
-- Upload only videos you own or have explicit permission to edit. Use the creator-provided original file or another authorized source. Do not bypass DRM, login restrictions, or platform protections.
-- Browser settings may ask permission for multiple automatic downloads.
-- The current upload endpoint accepts files up to 200 MB and clips up to 600 seconds.
-- Production use still needs authentication, storage limits, cleanup jobs, HTTPS, rate limiting, a job queue, and robust error handling.
+## Required Render environment variable
+Set `OPENAI_API_KEY` in Render → ai-clipper → Environment. Keep this key private; never paste it into the website or commit it to GitHub.
 
-## Requirements
-- Node.js 18+
-- FFmpeg installed on the server and available as `ffmpeg`
+The API account needs billing/available API credits. Transcription and model selection incur API charges. See [OpenAI API pricing](https://platform.openai.com/pricing/).
 
-## Run locally
+## Limitations and safe use
+- YouTube URLs are references only; this app does not download YouTube videos or livestreams. Use only a creator-provided original video or another authorized media source. Do not bypass DRM, login restrictions, or platform protections.
+- Audio extraction is limited to 24 MB for the transcription request. Long videos may need to be split into shorter parts.
+- This prototype handles uploaded, already-recorded video files. It does not yet capture an ongoing live stream.
+- The model's clip choices are suggestions, not a guarantee of virality.
+- The current upload limit is 200 MB. Production use still needs authentication, job queues, persistent storage, cleanup, rate limiting, and cost controls.
+
+## Run
+Requires Node.js 20+ and FFmpeg/ffprobe.
 ```bash
 npm install
 npm start
 ```
-Open `http://localhost:3000`.
-
-## Deploy
-Deploy this Node.js app to a server that supports FFmpeg. A static-only host cannot run the video-processing backend. Set the start command to `npm start` and ensure FFmpeg is installed.

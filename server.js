@@ -50,6 +50,202 @@ function removeFile(filePath) {
   }
 }
 
+
+function runProcess(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args);
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", chunk => { stdout += chunk.toString(); });
+    child.stderr.on("data", chunk => { stderr += chunk.toString(); });
+    child.on("error", reject);
+    child.on("close", code => {
+      if (code === 0) resolve(stdout.trim());
+      else reject(new Error(stderr.trim() || command + " failed."));
+    });
+  });
+}
+
+async function transcribeAndSelectMoments(videoPath) {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error("AI setup pending: Render me OPENAI_API_KEY environment variable add karein.");
+  }
+
+  const audioPath = path.join(TEMP_DIR, `audio-${crypto.randomBytes(10).toString("hex")}.mp3`);
+  try {
+    await runProcess("ffmpeg", [
+      "-hide_banner", "-loglevel", "error", "-y", "-i", videoPath,
+      "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k", "-f", "mp3", audioPath
+    ]);
+
+    const audio = await fs.promises.readFile(audioPath);
+    if (!audio.length || audio.length > 24 * 1024 * 1024) {
+      throw new Error("Audio 24 MB se bada hai. Chhota video upload karein (ya video ko chhote parts me baantein).");
+    }
+
+    const audioForm = new FormData();
+    audioForm.append("file", new Blob([audio], { type: "audio/mpeg" }), "audio.mp3");
+    audioForm.append("model", "whisper-1");
+    audioForm.append("response_format", "verbose_json");
+    const transcriptionResponse = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: audioForm
+    });
+    const transcriptionBody = await transcriptionResponse.json().catch(() => ({}));
+    if (!transcriptionResponse.ok) {
+      throw new Error(transcriptionBody.error?.message || "Transcription API failed. API key/billing check karein.");
+    }
+
+    const segments = Array.isArray(transcriptionBody.segments) ? transcriptionBody.segments : [];
+    if (!segments.length) throw new Error("Is video ki speech transcript nahi mil paayi.");
+
+    const durationText = await runProcess("ffprobe", [
+      "-v", "error", "-show_entries", "format=duration",
+      "-of", "default=noprint_wrappers=1:nokey=1", videoPath
+    ]);
+    const videoDuration = Number(durationText);
+    if (!Number.isFinite(videoDuration) || videoDuration < 20) {
+      throw new Error("Video ki duration read nahi ho paayi ya video bahut chhota hai.");
+    }
+
+    const compactTranscript = segments.slice(0, 2200).map(segment => ({
+      start: Number(segment.start),
+      end: Number(segment.end),
+      text: String(segment.text || "").slice(0, 500)
+    }));
+
+    const aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        temperature: 0.3,
+        response_format: { type: "json_object" },
+        messages: [
+          {
+            role: "system",
+            content: "You are an expert short-form video editor. Select exactly 10 distinct, high-retention moments from this transcript. Choose complete moments with a strong hook, payoff, emotion, surprise, humor, useful insight, or story. Do not invent events. Each clip must be 15 to 90 seconds, fit within video duration, and preferably not overlap. Return only JSON: {\"clips\":[{\"start\":number,\"end\":number,\"title\":string,\"reason\":string}]}. Times are seconds."
+          },
+          {
+            role: "user",
+            content: "Video duration seconds: " + videoDuration + "\nSelect exactly 10 clips from this timestamped transcript:\n" + JSON.stringify(compactTranscript)
+          }
+        ]
+      })
+    });
+    const aiBody = await aiResponse.json().catch(() => ({}));
+    if (!aiResponse.ok) {
+      throw new Error(aiBody.error?.message || "AI moment selection failed.");
+    }
+
+    let result;
+    try {
+      result = JSON.parse(aiBody.choices?.[0]?.message?.content || "{}");
+    } catch {
+      throw new Error("AI ne valid clip list return nahi ki. Dobara try karein.");
+    }
+
+    const clips = Array.isArray(result.clips) ? result.clips : [];
+    const valid = clips.map((clip, index) => {
+      const start = Math.max(0, Number(clip.start));
+      const end = Math.min(videoDuration, Number(clip.end));
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end - start < 15 || end - start > 90) return null;
+      return {
+        start: Math.round(start * 10) / 10,
+        end: Math.round(end * 10) / 10,
+        title: String(clip.title || `Moment ${index + 1}`).slice(0, 90),
+        reason: String(clip.reason || "AI-selected moment").slice(0, 180)
+      };
+    }).filter(Boolean).slice(0, 10);
+
+    if (valid.length !== 10) {
+      throw new Error("AI ko 10 valid alag clips nahi mile. Thoda lamba ya speech wala video try karein.");
+    }
+
+    return { clips: valid, videoDuration: Math.round(videoDuration) };
+  } finally {
+    removeFile(audioPath);
+  }
+}
+
+function createClipFile(inputPath, start, duration, outputPath) {
+  return runProcess("ffmpeg", [
+    "-hide_banner", "-loglevel", "error", "-y", "-threads", "1",
+    "-filter_threads", "1", "-ss", String(start), "-i", inputPath,
+    "-t", String(duration), "-map", "0:v:0", "-map", "0:a?",
+    "-vf", "scale=w='min(1280,iw)':h='min(720,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+    "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+    "-pix_fmt", "yuv420p", "-threads", "1", "-c:a", "aac",
+    "-b:a", "96k", "-movflags", "+faststart", outputPath
+  ]);
+}
+
+app.post("/api/analyze-video", upload.single("video"), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "Pehle creator ki permission wala original video upload karein." });
+  }
+  try {
+    const result = await transcribeAndSelectMoments(req.file.path);
+    res.json(result);
+  } catch (error) {
+    console.error("AI analysis error:", error.message);
+    res.status(400).json({ error: error.message || "AI analysis failed." });
+  } finally {
+    removeFile(req.file.path);
+  }
+});
+
+app.post("/api/create-clips", upload.single("video"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "Video file missing." });
+  let workDir;
+  try {
+    let clips;
+    try { clips = JSON.parse(req.body.clips || "[]"); } catch { clips = []; }
+    if (!Array.isArray(clips) || clips.length !== 10) {
+      throw new Error("Exactly 10 AI-selected clips required.");
+    }
+    workDir = path.join(TEMP_DIR, `batch-${crypto.randomBytes(10).toString("hex")}`);
+    fs.mkdirSync(workDir, { recursive: true });
+    const outputs = [];
+    for (let i = 0; i < clips.length; i++) {
+      const start = Number(clips[i].start);
+      const end = Number(clips[i].end);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end <= start || end - start > 90) {
+        throw new Error("AI clip timing invalid hai.");
+      }
+      const output = path.join(workDir, `ai-clip-${String(i + 1).padStart(2, "0")}.mp4`);
+      await createClipFile(req.file.path, start, end - start, output);
+      outputs.push(output);
+    }
+
+    const archiver = require("archiver");
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", 'attachment; filename="ai-clips-10.zip"');
+    const archive = archiver("zip", { zlib: { level: 1 } });
+    archive.on("error", error => {
+      console.error("ZIP error:", error.message);
+      if (!res.headersSent) res.status(500).end("Could not package clips.");
+      else res.destroy(error);
+    });
+    res.on("close", () => {
+      removeFile(req.file.path);
+      fs.rm(workDir, { recursive: true, force: true }, () => {});
+    });
+    archive.pipe(res);
+    outputs.forEach(file => archive.file(file, { name: path.basename(file) }));
+    await archive.finalize();
+  } catch (error) {
+    removeFile(req.file.path);
+    if (workDir) fs.rm(workDir, { recursive: true, force: true }, () => {});
+    console.error("Batch clip error:", error.message);
+    if (!res.headersSent) res.status(400).json({ error: error.message || "Could not create clips." });
+  }
+});
+
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
 });
